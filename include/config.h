@@ -10,7 +10,7 @@ static constexpr uint8_t ESPNOW_CHANNEL = 1;
 static constexpr uint8_t THIS_SLAVE_ID = SLAVE_ID;
 
 // ===== MAC-адреса 4 слейвов =====
-// ОБЯЗАТЕЛЬНО замени на реальные MAC твоих ESP32-C3
+
 static const uint8_t SLAVE_MACS[4][6] = {
     {0xB0, 0xA6, 0x04, 0x06, 0xD4, 0x74}, // slave0
     {0x08, 0x92, 0x72, 0x84, 0x39, 0xA4}, // slave1

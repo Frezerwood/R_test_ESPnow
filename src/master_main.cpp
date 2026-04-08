@@ -10,6 +10,9 @@
 
 static constexpr uint8_t BUTTON_PIN = 18;
 
+// текущий слейв (0..3)
+uint8_t currentSlave = 0;
+
 // --------------------------------------------------
 // ESP-NOW helpers
 // --------------------------------------------------
@@ -17,7 +20,7 @@ static constexpr uint8_t BUTTON_PIN = 18;
 bool addPeer(const uint8_t mac[6]) {
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, mac, 6);
-    peer.channel = 0;   // использовать текущий канал
+    peer.channel = 0;
     peer.encrypt = false;
 
     esp_err_t result = esp_now_add_peer(&peer);
@@ -47,32 +50,33 @@ bool sendServoCommand(uint8_t slaveId, uint8_t servoIndex, uint16_t holdMs) {
     );
 
     if (result != ESP_OK) {
-        Serial.printf("Send failed: slave=%u servo=%u err=%d\n",
-                      slaveId, servoIndex, result);
+        Serial.printf("Send failed: slave=%u err=%d\n",
+                      slaveId, result);
         return false;
     }
 
-    Serial.printf("Sent: slave=%u servo=%u hold=%u\n",
-                  slaveId, servoIndex, holdMs);
+    Serial.printf("Sent: slave=%u ALL servos hold=%u\n",
+                  slaveId, holdMs);
     return true;
 }
 
 // --------------------------------------------------
-// TEST: открыть все сервы на slave0 одновременно
+// TEST: открыть все сервы на текущем слейве
 // --------------------------------------------------
 
-void runSlave0AllServosTest() {
-    Serial.println("TEST start: slave0 -> ALL servos");
-    sendServoCommand(0, SERVO_INDEX_ALL, HOLD_MS);
-    Serial.println("TEST command sent");
+void runCurrentSlaveTest() {
+    Serial.printf("TEST: slave %u -> ALL servos\n", currentSlave);
+
+    sendServoCommand(currentSlave, SERVO_INDEX_ALL, HOLD_MS);
+
+    // переключаем на следующий
+    currentSlave = (currentSlave + 1) % 4;
+
+    Serial.printf("Next slave will be: %u\n", currentSlave);
 }
 
 // --------------------------------------------------
 // Button helpers
-// Кнопка подключена между GPIO18 и GND
-// INPUT_PULLUP:
-//   не нажата -> HIGH
-//   нажата    -> LOW
 // --------------------------------------------------
 
 bool isButtonPressed() {
@@ -115,8 +119,7 @@ void setup() {
     }
 
     Serial.println("ESP-NOW ready");
-    Serial.println("Button on GPIO18");
-    Serial.println("Press button -> open ALL servos on slave0");
+    Serial.println("Press button to cycle slaves");
 }
 
 void loop() {
@@ -125,7 +128,8 @@ void loop() {
 
         if (isButtonPressed()) {
             Serial.println("Button pressed");
-            runSlave0AllServosTest();
+
+            runCurrentSlaveTest();
 
             while (isButtonPressed()) {
                 delay(10);

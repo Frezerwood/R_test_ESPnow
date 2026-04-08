@@ -10,8 +10,8 @@
 
 static constexpr uint8_t BUTTON_PIN = 18;
 
-// текущий слейв (0..3)
-uint8_t currentSlave = 0;
+// текущий ряд 0..3
+uint8_t currentRow = 0;
 
 // --------------------------------------------------
 // ESP-NOW helpers
@@ -33,14 +33,14 @@ void onDataSent(const uint8_t* mac_addr, esp_now_send_status_t status) {
                   status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
 }
 
-bool sendServoCommand(uint8_t slaveId, uint8_t servoIndex, uint16_t holdMs) {
+bool sendServoMaskCommand(uint8_t slaveId, uint8_t servoMask, uint16_t holdMs) {
     if (slaveId >= 4) {
         Serial.printf("Wrong slave id: %u\n", slaveId);
         return false;
     }
 
     ServoCommand cmd;
-    cmd.servoIndex = servoIndex;
+    cmd.servoMask = servoMask;
     cmd.holdMs = holdMs;
 
     esp_err_t result = esp_now_send(
@@ -50,29 +50,61 @@ bool sendServoCommand(uint8_t slaveId, uint8_t servoIndex, uint16_t holdMs) {
     );
 
     if (result != ESP_OK) {
-        Serial.printf("Send failed: slave=%u err=%d\n",
-                      slaveId, result);
+        Serial.printf("Send failed: slave=%u mask=0x%02X err=%d\n",
+                      slaveId, servoMask, result);
         return false;
     }
 
-    Serial.printf("Sent: slave=%u ALL servos hold=%u\n",
-                  slaveId, holdMs);
+    Serial.printf("Sent: slave=%u mask=0x%02X hold=%u\n",
+                  slaveId, servoMask, holdMs);
     return true;
 }
 
 // --------------------------------------------------
-// TEST: открыть все сервы на текущем слейве
+// Ряды глобальной матрицы 4x4
+//
+// Физическая схема слейвов:
+// [0][1]
+// [2][3]
+//
+// Локальные сервы на слейве:
+// 0 1
+// 2 3
+//
+// Тогда:
+// row 0 -> slave0: 0,1   + slave1: 0,1
+// row 1 -> slave0: 2,3   + slave1: 2,3
+// row 2 -> slave2: 0,1   + slave3: 0,1
+// row 3 -> slave2: 2,3   + slave3: 2,3
 // --------------------------------------------------
 
-void runCurrentSlaveTest() {
-    Serial.printf("TEST: slave %u -> ALL servos\n", currentSlave);
+void runCurrentRowTest() {
+    Serial.printf("TEST: global row %u\n", currentRow);
 
-    sendServoCommand(currentSlave, SERVO_INDEX_ALL, HOLD_MS);
+    switch (currentRow) {
+        case 0:
+            sendServoMaskCommand(0, 0b00000011, HOLD_MS); // servos 0,1
+            sendServoMaskCommand(1, 0b00000011, HOLD_MS); // servos 0,1
+            break;
 
-    // переключаем на следующий
-    currentSlave = (currentSlave + 1) % 4;
+        case 1:
+            sendServoMaskCommand(0, 0b00001100, HOLD_MS); // servos 2,3
+            sendServoMaskCommand(1, 0b00001100, HOLD_MS); // servos 2,3
+            break;
 
-    Serial.printf("Next slave will be: %u\n", currentSlave);
+        case 2:
+            sendServoMaskCommand(2, 0b00000011, HOLD_MS); // servos 0,1
+            sendServoMaskCommand(3, 0b00000011, HOLD_MS); // servos 0,1
+            break;
+
+        case 3:
+            sendServoMaskCommand(2, 0b00001100, HOLD_MS); // servos 2,3
+            sendServoMaskCommand(3, 0b00001100, HOLD_MS); // servos 2,3
+            break;
+    }
+
+    currentRow = (currentRow + 1) % 4;
+    Serial.printf("Next row will be: %u\n", currentRow);
 }
 
 // --------------------------------------------------
@@ -119,7 +151,7 @@ void setup() {
     }
 
     Serial.println("ESP-NOW ready");
-    Serial.println("Press button to cycle slaves");
+    Serial.println("Press button to open horizontal rows from top to bottom");
 }
 
 void loop() {
@@ -129,7 +161,7 @@ void loop() {
         if (isButtonPressed()) {
             Serial.println("Button pressed");
 
-            runCurrentSlaveTest();
+            runCurrentRowTest();
 
             while (isButtonPressed()) {
                 delay(10);

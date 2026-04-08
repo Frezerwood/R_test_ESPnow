@@ -31,28 +31,7 @@ void writeServoImmediate(uint8_t servoIndex, uint8_t angle) {
     currentAngles[servoIndex] = safeAngle;
 }
 
-void moveServoSmooth(uint8_t servoIndex, uint8_t targetAngle, uint8_t stepDelayMs = 4) {
-    if (servoIndex >= 4) return;
-
-    int currentAngle = currentAngles[servoIndex];
-    int target = clampAngle(targetAngle);
-
-    if (currentAngle < target) {
-        for (int angle = currentAngle; angle <= target; angle++) {
-            servos[servoIndex].write(angle);
-            currentAngles[servoIndex] = angle;
-            delay(stepDelayMs);
-        }
-    } else {
-        for (int angle = currentAngle; angle >= target; angle--) {
-            servos[servoIndex].write(angle);
-            currentAngles[servoIndex] = angle;
-            delay(stepDelayMs);
-        }
-    }
-}
-
-void moveAllServosSmooth(uint8_t targetAngle, uint8_t stepDelayMs = 4) {
+void moveSelectedServosSmooth(uint8_t servoMask, uint8_t targetAngle, uint8_t stepDelayMs = 8) {
     const int target = clampAngle(targetAngle);
 
     bool finished = false;
@@ -60,6 +39,10 @@ void moveAllServosSmooth(uint8_t targetAngle, uint8_t stepDelayMs = 4) {
         finished = true;
 
         for (int i = 0; i < 4; i++) {
+            if (((servoMask >> i) & 0x01) == 0) {
+                continue;
+            }
+
             if (currentAngles[i] < target) {
                 currentAngles[i]++;
                 servos[i].write(currentAngles[i]);
@@ -75,24 +58,13 @@ void moveAllServosSmooth(uint8_t targetAngle, uint8_t stepDelayMs = 4) {
     }
 }
 
-void closeServo(uint8_t servoIndex) {
-    if (servoIndex >= 4) return;
-    moveServoSmooth(servoIndex, CENTER_ANGLE, 8);
-}
-
-void openServo(uint8_t servoIndex) {
-    if (servoIndex >= 4) return;
+void openServosByMask(uint8_t servoMask) {
     uint8_t angle = clampAngle(CENTER_ANGLE + OPEN_DELTA);
-    moveServoSmooth(servoIndex, angle, 8);
+    moveSelectedServosSmooth(servoMask, angle, 8);
 }
 
-void openAllServos() {
-    uint8_t angle = clampAngle(CENTER_ANGLE + OPEN_DELTA);
-    moveAllServosSmooth(angle, 8);
-}
-
-void closeAllServos() {
-    moveAllServosSmooth(CENTER_ANGLE, 8);
+void closeServosByMask(uint8_t servoMask) {
+    moveSelectedServosSmooth(servoMask, CENTER_ANGLE, 8);
 }
 
 void initServos() {
@@ -115,25 +87,18 @@ void initServos() {
 // --------------------------------------------------
 
 void executeCommand(const ServoCommand& cmd) {
-    if (cmd.servoIndex == SERVO_INDEX_ALL) {
-        Serial.printf("Recv: ALL servos, hold=%u\n", cmd.holdMs);
-        openAllServos();
-        delay(cmd.holdMs);
-        closeAllServos();
-        Serial.println("Done: ALL servos");
+    if ((cmd.servoMask & 0x0F) == 0) {
+        Serial.println("Empty servo mask");
         return;
     }
 
-    if (cmd.servoIndex >= 4) {
-        Serial.printf("Wrong servo index: %u\n", cmd.servoIndex);
-        return;
-    }
+    Serial.printf("Recv: mask=0x%02X hold=%u\n", cmd.servoMask, cmd.holdMs);
 
-    Serial.printf("Recv: servo=%u hold=%u\n", cmd.servoIndex, cmd.holdMs);
-    openServo(cmd.servoIndex);
+    openServosByMask(cmd.servoMask);
     delay(cmd.holdMs);
-    closeServo(cmd.servoIndex);
-    Serial.printf("Done: servo=%u\n", cmd.servoIndex);
+    closeServosByMask(cmd.servoMask);
+
+    Serial.printf("Done: mask=0x%02X\n", cmd.servoMask);
 }
 
 // --------------------------------------------------

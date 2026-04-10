@@ -12,7 +12,7 @@ static constexpr int SERVO_OFFSETS[4] = {-7, -4, -5, -4};
 #elif SLAVE_ID == 1
 static constexpr int SERVO_OFFSETS[4] = {-8, -6, -5, -8};
 #elif SLAVE_ID == 2
-static constexpr int SERVO_OFFSETS[4] = {-5, -5, -3, -4};
+static constexpr int SERVO_OFFSETS[4] = {-5, -5, -2, -2};
 #elif SLAVE_ID == 3
 static constexpr int SERVO_OFFSETS[4] = {10, -3, -3, 5};
 #else
@@ -36,10 +36,10 @@ static constexpr int SERVO_PINS[4] = {2, 3, 4, 5};
 
 // ===== Углы =====
 static constexpr uint8_t CENTER_ANGLE = 90;
-static constexpr uint8_t OPEN_DELTA   = 30;
+static constexpr uint8_t OPEN_DELTA   = 35;
 
 // ===== Тайминги =====
-static constexpr uint16_t HOLD_MS       = 220;
+static constexpr uint16_t HOLD_MS       = 240;
 static constexpr uint16_t STEP_DELAY_MS = 260;
 
 // ===== Глобальная матрица =====

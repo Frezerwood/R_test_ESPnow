@@ -40,64 +40,68 @@ void writeServoImmediate(uint8_t servoIndex, uint8_t angle) {
     uint8_t safeAngle = clampAngle(angle);
     servos[servoIndex].write(safeAngle);
     currentAngles[servoIndex] = safeAngle;
+}// --------------------------------------------------
+// Ease-In-Out Математика
+// --------------------------------------------------
+
+/**
+ * Функция сглаживания Ease-In-Out (Синусоидальная)
+ * t: прогресс движения от 0.0 до 1.0
+ * возвращает: сглаженный коэффициент от 0.0 до 1.0
+ */
+float fEaseInOut(float t) {
+    return 0.5f * (1.0f - cosf(t * PI));
 }
 
-void openServosByMask(uint8_t servoMask) {
-    bool finished = false;
+/**
+ * Общая функция для перемещения группы сервоприводов
+ * targetType: true для открытия, false для закрытия
+ */
+void moveServosSmooth(uint8_t servoMask, bool open) {
+    unsigned long startTime = millis();
+    const uint16_t duration = 300; // Длительность движения в мс (настрой под себя)
+    
+    // Запоминаем начальные углы всех серво перед стартом
+    uint8_t startAngles[4];
+    uint8_t targetAngles[4];
+    
+    for (int i = 0; i < 4; i++) {
+        startAngles[i] = currentAngles[i];
+        targetAngles[i] = open ? getOpenAngle(i) : getClosedAngle(i);
+    }
 
-    while (!finished) {
-        finished = true;
+    while (true) {
+        unsigned long elapsed = millis() - startTime;
+        float progress = (float)elapsed / duration;
 
+        if (progress > 1.0f) progress = 1.0f;
+
+        // Вычисляем коэффициент сглаживания
+        float ease = fEaseInOut(progress);
+
+        // Обновляем позиции всех серво по маске
         for (int i = 0; i < 4; i++) {
-            if (((servoMask >> i) & 0x01) == 0) {
-                continue;
-            }
-
-            uint8_t target = getOpenAngle(i);
-
-            if (currentAngles[i] < target) {
-                currentAngles[i]++;
+            if (((servoMask >> i) & 0x01) == 1) {
+                // Линейная интерполяция с коэффициентом Ease
+                float currentF = (float)startAngles[i] + (float)(targetAngles[i] - startAngles[i]) * ease;
+                currentAngles[i] = (uint8_t)round(currentF);
                 servos[i].write(currentAngles[i]);
-                finished = false;
-            } else if (currentAngles[i] > target) {
-                currentAngles[i]--;
-                servos[i].write(currentAngles[i]);
-                finished = false;
             }
         }
 
-        delay(8);
+        if (progress >= 1.0f) break;
+        delay(10); // Частота обновления ~100Гц
     }
+}
+
+// Теперь переписываем твои функции через общую плавную функцию
+void openServosByMask(uint8_t servoMask) {
+    moveServosSmooth(servoMask, true);
 }
 
 void closeServosByMask(uint8_t servoMask) {
-    bool finished = false;
-
-    while (!finished) {
-        finished = true;
-
-        for (int i = 0; i < 4; i++) {
-            if (((servoMask >> i) & 0x01) == 0) {
-                continue;
-            }
-
-            uint8_t target = getClosedAngle(i);
-
-            if (currentAngles[i] < target) {
-                currentAngles[i]++;
-                servos[i].write(currentAngles[i]);
-                finished = false;
-            } else if (currentAngles[i] > target) {
-                currentAngles[i]--;
-                servos[i].write(currentAngles[i]);
-                finished = false;
-            }
-        }
-
-        delay(8);
-    }
+    moveServosSmooth(servoMask, false);
 }
-
 void initServos() {
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);

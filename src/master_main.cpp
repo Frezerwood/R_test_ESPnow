@@ -132,6 +132,14 @@ void runWaveOnce() {
 }
 
 // --------------------------------------------------
+// All On 2 slave
+// --------------------------------------------------
+void runSlave2AllServos() {
+    Serial.println("Run SLAVE 2 ALL SERVOS");
+    sendServoMaskCommand(2, 0b00001111, HOLD_MS);
+} 
+
+// --------------------------------------------------
 // Row test
 // --------------------------------------------------
 void runRows3Times() {
@@ -164,7 +172,7 @@ void runRows3Times() {
                     break;
             }
 
-            delay(600); // можно подкрутить
+            delay(900); // можно подкрутить
         }
     }
 

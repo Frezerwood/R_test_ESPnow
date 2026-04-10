@@ -475,16 +475,10 @@ static constexpr int SERVO_OFFSETS[4] = {
     -3
 };
 3------------
-Current angles and offsets:
-servo 0 -> angle=95, offset=5
-servo 1 -> angle=72, offset=-18
-servo 2 -> angle=90, offset=0
-servo 3 -> angle=100, offset=10
-
 SERVO_OFFSETS block:
 static constexpr int SERVO_OFFSETS[4] = {
-    5,
-    -18,
-    0,
-    10
+    -5,
+    -5,
+    -5,
+    -3
 };

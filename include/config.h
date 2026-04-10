@@ -14,7 +14,7 @@ static constexpr int SERVO_OFFSETS[4] = {-8, -6, -5, -8};
 #elif SLAVE_ID == 2
 static constexpr int SERVO_OFFSETS[4] = {-5, -5, -2, -2};
 #elif SLAVE_ID == 3
-static constexpr int SERVO_OFFSETS[4] = {10, -3, -3, 5};
+static constexpr int SERVO_OFFSETS[4] = {-5, -5, -5, -3};
 #else
 static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #endif

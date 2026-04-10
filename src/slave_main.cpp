@@ -6,103 +6,136 @@
 #include "config.h"
 #include "protocol.h"
 
-Servo servos[4];
-uint8_t currentAngles[4] = {
-    CENTER_ANGLE,
-    CENTER_ANGLE,
-    CENTER_ANGLE,
-    CENTER_ANGLE
+// Состояния каждой сервомашинки
+enum ServoPhase {
+    IDLE,
+    MOVING_OPEN,
+    HOLDING,
+    MOVING_CLOSE
 };
 
+struct ServoState {
+    ServoPhase phase = IDLE;
+    uint8_t startAngle = CENTER_ANGLE;
+    uint8_t targetAngle = CENTER_ANGLE;
+    unsigned long startTime = 0;
+    uint16_t duration = 450; // Время хода в мс
+    uint16_t holdTime = 0;   // Время удержания из команды
+};
+
+Servo servos[4];
+ServoState states[4];
+uint8_t currentAngles[4] = {CENTER_ANGLE, CENTER_ANGLE, CENTER_ANGLE, CENTER_ANGLE};
+
 // --------------------------------------------------
-// Servo helpers
+// Вспомогательные функции
 // --------------------------------------------------
 
 uint8_t clampAngle(int value) {
-    if (value < 0) return 0;
-    if (value > 180) return 180;
-    return static_cast<uint8_t>(value);
+    return (uint8_t)constrain(value, 0, 180);
 }
 
-uint8_t getClosedAngle(uint8_t servoIndex) {
-    if (servoIndex >= 4) return CENTER_ANGLE;
-    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[servoIndex]);
+uint8_t getClosedAngle(uint8_t idx) {
+    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[idx]);
 }
 
-uint8_t getOpenAngle(uint8_t servoIndex) {
-    if (servoIndex >= 4) return CENTER_ANGLE;
-    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[servoIndex] + OPEN_DELTA);
+uint8_t getOpenAngle(uint8_t idx) {
+    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[idx] + OPEN_DELTA);
 }
 
-void writeServoImmediate(uint8_t servoIndex, uint8_t angle) {
-    if (servoIndex >= 4) return;
-
-    uint8_t safeAngle = clampAngle(angle);
-    servos[servoIndex].write(safeAngle);
-    currentAngles[servoIndex] = safeAngle;
-}// --------------------------------------------------
-// Ease-In-Out Математика
-// --------------------------------------------------
-
-/**
- * Функция сглаживания Ease-In-Out (Синусоидальная)
- * t: прогресс движения от 0.0 до 1.0
- * возвращает: сглаженный коэффициент от 0.0 до 1.0
- */
+// Математика Ease-In-Out
 float fEaseInOut(float t) {
     return 0.5f * (1.0f - cosf(t * PI));
 }
 
-/**
- * Общая функция для перемещения группы сервоприводов
- * targetType: true для открытия, false для закрытия
- */
-void moveServosSmooth(uint8_t servoMask, bool open) {
-    unsigned long startTime = millis();
-    const uint16_t duration = 300; // Длительность движения в мс (настрой под себя)
-    
-    // Запоминаем начальные углы всех серво перед стартом
-    uint8_t startAngles[4];
-    uint8_t targetAngles[4];
-    
+// --------------------------------------------------
+// Ядро управления (Non-blocking)
+// --------------------------------------------------
+
+void updateServos() {
+    unsigned long now = millis();
+
     for (int i = 0; i < 4; i++) {
-        startAngles[i] = currentAngles[i];
-        targetAngles[i] = open ? getOpenAngle(i) : getClosedAngle(i);
-    }
+        if (states[i].phase == IDLE) continue;
 
-    while (true) {
-        unsigned long elapsed = millis() - startTime;
-        float progress = (float)elapsed / duration;
+        // --- Фазы движения (Открытие или Закрытие) ---
+        if (states[i].phase == MOVING_OPEN || states[i].phase == MOVING_CLOSE) {
+            float progress = (float)(now - states[i].startTime) / states[i].duration;
+            
+            if (progress >= 1.0f) {
+                progress = 1.0f;
+                // Переход к следующей фазе
+                if (states[i].phase == MOVING_OPEN) {
+                    states[i].phase = HOLDING;
+                    states[i].startTime = now;
+                } else {
+                    states[i].phase = IDLE;
+                }
+            }
 
-        if (progress > 1.0f) progress = 1.0f;
-
-        // Вычисляем коэффициент сглаживания
-        float ease = fEaseInOut(progress);
-
-        // Обновляем позиции всех серво по маске
-        for (int i = 0; i < 4; i++) {
-            if (((servoMask >> i) & 0x01) == 1) {
-                // Линейная интерполяция с коэффициентом Ease
-                float currentF = (float)startAngles[i] + (float)(targetAngles[i] - startAngles[i]) * ease;
-                currentAngles[i] = (uint8_t)round(currentF);
-                servos[i].write(currentAngles[i]);
+            float ease = fEaseInOut(progress);
+            float angleF = (float)states[i].startAngle + (float)(states[i].targetAngle - states[i].startAngle) * ease;
+            
+            currentAngles[i] = (uint8_t)round(angleF);
+            servos[i].write(currentAngles[i]);
+        }
+        
+        // --- Фаза удержания (HOLD) ---
+        else if (states[i].phase == HOLDING) {
+            if (now - states[i].startTime >= states[i].holdTime) {
+                // Начинаем закрытие
+                states[i].phase = MOVING_CLOSE;
+                states[i].startAngle = currentAngles[i];
+                states[i].targetAngle = getClosedAngle(i);
+                states[i].startTime = now;
+                states[i].duration = 500; // Можно сделать закрытие чуть медленнее для эстетики
             }
         }
-
-        if (progress >= 1.0f) break;
-        delay(10); // Частота обновления ~100Гц
     }
 }
 
-// Теперь переписываем твои функции через общую плавную функцию
-void openServosByMask(uint8_t servoMask) {
-    moveServosSmooth(servoMask, true);
+// --------------------------------------------------
+// Обработка команд
+// --------------------------------------------------
+
+void executeCommand(const ServoCommand& cmd) {
+    for (int i = 0; i < 4; i++) {
+        // Проверяем, касается ли команда этой серво (битмаска)
+        if ((cmd.servoMask >> i) & 0x01) {
+            states[i].startAngle = currentAngles[i]; // Начинаем из текущей позиции (важно!)
+            states[i].targetAngle = getOpenAngle(i);
+            states[i].startTime = millis();
+            states[i].holdTime = cmd.holdMs;
+            states[i].duration = 450;
+            states[i].phase = MOVING_OPEN;
+        }
+    }
 }
 
-void closeServosByMask(uint8_t servoMask) {
-    moveServosSmooth(servoMask, false);
+// --------------------------------------------------
+// ESP-NOW Callbacks
+// --------------------------------------------------
+
+#if ESP_IDF_VERSION_MAJOR >= 5
+void onDataRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+#else
+void onDataRecv(const uint8_t* mac_addr, const uint8_t* data, int len) {
+#endif
+    if (len == sizeof(ServoCommand)) {
+        ServoCommand cmd;
+        memcpy(&cmd, data, sizeof(cmd));
+        executeCommand(cmd);
+    }
 }
-void initServos() {
+
+// --------------------------------------------------
+// Setup & Loop
+// --------------------------------------------------
+
+void setup() {
+    Serial.begin(115200);
+    
+    // Инициализация серво
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
     ESP32PWM::allocateTimer(2);
@@ -111,90 +144,24 @@ void initServos() {
     for (int i = 0; i < 4; i++) {
         servos[i].setPeriodHertz(50);
         servos[i].attach(SERVO_PINS[i], 500, 2400);
-        writeServoImmediate(i, getClosedAngle(i));
+        // Устанавливаем в закрытое положение сразу
+        uint8_t start = getClosedAngle(i);
+        servos[i].write(start);
+        currentAngles[i] = start;
     }
 
-    delay(300);
-}
-
-// --------------------------------------------------
-// Command execution
-// --------------------------------------------------
-
-void executeCommand(const ServoCommand& cmd) {
-    if ((cmd.servoMask & 0x0F) == 0) {
-        Serial.println("Empty servo mask");
-        return;
-    }
-
-    Serial.printf("Recv: mask=0x%02X hold=%u\n", cmd.servoMask, cmd.holdMs);
-
-    openServosByMask(cmd.servoMask);
-    delay(cmd.holdMs);
-    closeServosByMask(cmd.servoMask);
-
-    Serial.printf("Done: mask=0x%02X\n", cmd.servoMask);
-}
-
-// --------------------------------------------------
-// ESP-NOW callback
-// --------------------------------------------------
-
-#if ESP_IDF_VERSION_MAJOR >= 5
-void onDataRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
-    (void)info;
-
-    if (len != sizeof(ServoCommand)) {
-        Serial.printf("Wrong packet size: %d\n", len);
-        return;
-    }
-
-    ServoCommand cmd;
-    memcpy(&cmd, data, sizeof(cmd));
-    executeCommand(cmd);
-}
-#else
-void onDataRecv(const uint8_t* mac_addr, const uint8_t* data, int len) {
-    (void)mac_addr;
-
-    if (len != sizeof(ServoCommand)) {
-        Serial.printf("Wrong packet size: %d\n", len);
-        return;
-    }
-
-    ServoCommand cmd;
-    memcpy(&cmd, data, sizeof(cmd));
-    executeCommand(cmd);
-}
-#endif
-
-// --------------------------------------------------
-// setup / loop
-// --------------------------------------------------
-
-void setup() {
-    Serial.begin(115200);
-    delay(1000);
-
-    Serial.printf("\n=== SLAVE START, ID=%u ===\n", THIS_SLAVE_ID);
-
-    initServos();
-
+    // WiFi и ESP-NOW
     WiFi.mode(WIFI_STA);
-
-    Serial.print("Slave MAC: ");
-    Serial.println(WiFi.macAddress());
-
     if (esp_now_init() != ESP_OK) {
-        Serial.println("esp_now_init failed");
-        while (true) {
-            delay(1000);
-        }
+        Serial.println("ESP-NOW Init Failed");
+        ESP.restart();
     }
 
     esp_now_register_recv_cb(onDataRecv);
-    Serial.println("ESP-NOW ready");
+    Serial.printf("Slave ID %d Ready. MAC: %s\n", THIS_SLAVE_ID, WiFi.macAddress().c_str());
 }
 
 void loop() {
+    // Вызываем обновление физики как можно чаще
+    updateServos();
 }

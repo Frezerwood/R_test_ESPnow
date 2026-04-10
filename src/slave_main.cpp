@@ -24,17 +24,27 @@ uint8_t clampAngle(int value) {
     return static_cast<uint8_t>(value);
 }
 
+uint8_t getClosedAngle(uint8_t servoIndex) {
+    if (servoIndex >= 4) return CENTER_ANGLE;
+    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[servoIndex]);
+}
+
+uint8_t getOpenAngle(uint8_t servoIndex) {
+    if (servoIndex >= 4) return CENTER_ANGLE;
+    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[servoIndex] + OPEN_DELTA);
+}
+
 void writeServoImmediate(uint8_t servoIndex, uint8_t angle) {
     if (servoIndex >= 4) return;
+
     uint8_t safeAngle = clampAngle(angle);
     servos[servoIndex].write(safeAngle);
     currentAngles[servoIndex] = safeAngle;
 }
 
-void moveSelectedServosSmooth(uint8_t servoMask, uint8_t targetAngle, uint8_t stepDelayMs = 8) {
-    const int target = clampAngle(targetAngle);
-
+void openServosByMask(uint8_t servoMask) {
     bool finished = false;
+
     while (!finished) {
         finished = true;
 
@@ -42,6 +52,8 @@ void moveSelectedServosSmooth(uint8_t servoMask, uint8_t targetAngle, uint8_t st
             if (((servoMask >> i) & 0x01) == 0) {
                 continue;
             }
+
+            uint8_t target = getOpenAngle(i);
 
             if (currentAngles[i] < target) {
                 currentAngles[i]++;
@@ -54,17 +66,36 @@ void moveSelectedServosSmooth(uint8_t servoMask, uint8_t targetAngle, uint8_t st
             }
         }
 
-        delay(stepDelayMs);
+        delay(8);
     }
 }
 
-void openServosByMask(uint8_t servoMask) {
-    uint8_t angle = clampAngle(CENTER_ANGLE + OPEN_DELTA);
-    moveSelectedServosSmooth(servoMask, angle, 8);
-}
-
 void closeServosByMask(uint8_t servoMask) {
-    moveSelectedServosSmooth(servoMask, CENTER_ANGLE, 8);
+    bool finished = false;
+
+    while (!finished) {
+        finished = true;
+
+        for (int i = 0; i < 4; i++) {
+            if (((servoMask >> i) & 0x01) == 0) {
+                continue;
+            }
+
+            uint8_t target = getClosedAngle(i);
+
+            if (currentAngles[i] < target) {
+                currentAngles[i]++;
+                servos[i].write(currentAngles[i]);
+                finished = false;
+            } else if (currentAngles[i] > target) {
+                currentAngles[i]--;
+                servos[i].write(currentAngles[i]);
+                finished = false;
+            }
+        }
+
+        delay(8);
+    }
 }
 
 void initServos() {
@@ -76,7 +107,7 @@ void initServos() {
     for (int i = 0; i < 4; i++) {
         servos[i].setPeriodHertz(50);
         servos[i].attach(SERVO_PINS[i], 500, 2400);
-        writeServoImmediate(i, CENTER_ANGLE);
+        writeServoImmediate(i, getClosedAngle(i));
     }
 
     delay(300);

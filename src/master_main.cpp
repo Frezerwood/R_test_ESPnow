@@ -10,8 +10,8 @@
 
 static constexpr uint8_t BUTTON_PIN = 18;
 
-// текущий ряд 0..3
-uint8_t currentRow = 0;
+// пауза между диагоналями wave
+static constexpr uint16_t WAVE_STEP_DELAY_MS = 370;
 
 // --------------------------------------------------
 // ESP-NOW helpers
@@ -61,52 +61,115 @@ bool sendServoMaskCommand(uint8_t slaveId, uint8_t servoMask, uint16_t holdMs) {
 }
 
 // --------------------------------------------------
-// Ряды глобальной матрицы 4x4
+// Mapping: global 4x4 -> slave + local servo
 //
-// Физическая схема слейвов:
+// Раскладка слейвов:
 // [0][1]
 // [2][3]
 //
-// Локальные сервы на слейве:
+// Локальные сервы на каждом слейве:
 // 0 1
 // 2 3
-//
-// Тогда:
-// row 0 -> slave0: 0,1   + slave1: 0,1
-// row 1 -> slave0: 2,3   + slave1: 2,3
-// row 2 -> slave2: 0,1   + slave3: 0,1
-// row 3 -> slave2: 2,3   + slave3: 2,3
 // --------------------------------------------------
 
-void runCurrentRowTest() {
-    Serial.printf("TEST: global row %u\n", currentRow);
+void mapGlobalCellToSlave(
+    uint8_t row,
+    uint8_t col,
+    uint8_t& slaveId,
+    uint8_t& servoIndex
+) {
+    slaveId = (row / 2) * 2 + (col / 2);
 
-    switch (currentRow) {
-        case 0:
-            sendServoMaskCommand(0, 0b00000011, HOLD_MS); // servos 0,1
-            sendServoMaskCommand(1, 0b00000011, HOLD_MS); // servos 0,1
-            break;
+    uint8_t localRow = row % 2;
+    uint8_t localCol = col % 2;
 
-        case 1:
-            sendServoMaskCommand(0, 0b00001100, HOLD_MS); // servos 2,3
-            sendServoMaskCommand(1, 0b00001100, HOLD_MS); // servos 2,3
-            break;
-
-        case 2:
-            sendServoMaskCommand(2, 0b00000011, HOLD_MS); // servos 0,1
-            sendServoMaskCommand(3, 0b00000011, HOLD_MS); // servos 0,1
-            break;
-
-        case 3:
-            sendServoMaskCommand(2, 0b00001100, HOLD_MS); // servos 2,3
-            sendServoMaskCommand(3, 0b00001100, HOLD_MS); // servos 2,3
-            break;
-    }
-
-    currentRow = (currentRow + 1) % 4;
-    Serial.printf("Next row will be: %u\n", currentRow);
+    servoIndex = localRow * 2 + localCol;
 }
 
+// --------------------------------------------------
+// Wave: диагонали сверху-слева -> вниз-вправо
+// --------------------------------------------------
+
+void runWaveOnce() {
+    Serial.println("Run WAVE start");
+
+    // Для матрицы 4x4 диагоналей 7: sum = 0..6
+    for (uint8_t diag = 0; diag <= 6; diag++) {
+        uint8_t slaveMasks[4] = {0, 0, 0, 0};
+
+        // Собираем все клетки, где row + col == diag
+        for (uint8_t row = 0; row < GLOBAL_ROWS; row++) {
+            for (uint8_t col = 0; col < GLOBAL_COLS; col++) {
+                if ((row + col) != diag) {
+                    continue;
+                }
+
+                uint8_t slaveId = 0;
+                uint8_t servoIndex = 0;
+                mapGlobalCellToSlave(row, col, slaveId, servoIndex);
+
+                slaveMasks[slaveId] |= (1 << servoIndex);
+            }
+        }
+
+        Serial.printf("Diag %u -> masks: [%02X %02X %02X %02X]\n",
+                      diag,
+                      slaveMasks[0],
+                      slaveMasks[1],
+                      slaveMasks[2],
+                      slaveMasks[3]);
+
+        for (uint8_t slaveId = 0; slaveId < 4; slaveId++) {
+            if (slaveMasks[slaveId] != 0) {
+                sendServoMaskCommand(slaveId, slaveMasks[slaveId], HOLD_MS);
+            }
+        }
+
+        delay(WAVE_STEP_DELAY_MS);
+    }
+
+    Serial.println("Run WAVE done");
+}
+
+// --------------------------------------------------
+// Row test
+// --------------------------------------------------
+void runRows3Times() {
+    Serial.println("Run ROWS x3 start");
+
+    for (int repeat = 0; repeat < 3; repeat++) {
+        Serial.printf("Cycle %d\n", repeat + 1);
+
+        for (uint8_t row = 0; row < 4; row++) {
+
+            switch (row) {
+                case 0:
+                    sendServoMaskCommand(0, 0b00000011, HOLD_MS);
+                    sendServoMaskCommand(1, 0b00000011, HOLD_MS);
+                    break;
+
+                case 1:
+                    sendServoMaskCommand(0, 0b00001100, HOLD_MS);
+                    sendServoMaskCommand(1, 0b00001100, HOLD_MS);
+                    break;
+
+                case 2:
+                    sendServoMaskCommand(2, 0b00000011, HOLD_MS);
+                    sendServoMaskCommand(3, 0b00000011, HOLD_MS);
+                    break;
+
+                case 3:
+                    sendServoMaskCommand(2, 0b00001100, HOLD_MS);
+                    sendServoMaskCommand(3, 0b00001100, HOLD_MS);
+                    break;
+            }
+
+            delay(600); // можно подкрутить
+        }
+    }
+
+    Serial.println("Run ROWS x3 done");
+}
 // --------------------------------------------------
 // Button helpers
 // --------------------------------------------------
@@ -151,7 +214,7 @@ void setup() {
     }
 
     Serial.println("ESP-NOW ready");
-    Serial.println("Press button to open horizontal rows from top to bottom");
+    Serial.println("Press button to run wave");
 }
 
 void loop() {
@@ -161,7 +224,7 @@ void loop() {
         if (isButtonPressed()) {
             Serial.println("Button pressed");
 
-            runCurrentRowTest();
+            runRows3Times();
 
             while (isButtonPressed()) {
                 delay(10);

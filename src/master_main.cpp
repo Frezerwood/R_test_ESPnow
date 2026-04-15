@@ -75,13 +75,26 @@ bool addPeer(const uint8_t mac[6])
     return (result == ESP_OK || result == ESP_ERR_ESPNOW_EXIST);
 }
 
-void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
-{
-    (void)mac_addr;
-    Serial.printf("Send status: %s\n",
-                  status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
-}
+// void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
+// {
+//     (void)mac_addr;
+//     Serial.printf("Send status: %s\n",
+//                   status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+// }
 
+// ESP-NOW send callback (updated for ESP32 core 3.x / IDF 5.5+)
+void onDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
+{
+    Serial.printf("Last Packet Send Status: %s\n",
+                  status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+
+    // Optional: print destination MAC (now available via tx_info->des_addr)
+    if (tx_info && tx_info->des_addr) {
+        Serial.printf("  To MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      tx_info->des_addr[0], tx_info->des_addr[1], tx_info->des_addr[2],
+                      tx_info->des_addr[3], tx_info->des_addr[4], tx_info->des_addr[5]);
+    }
+}
 // --------------------------------------------------
 // Mapping: global 4x4 -> slave + local servo
 //

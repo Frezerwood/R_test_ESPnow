@@ -1,0 +1,680 @@
+[platformio]
+default_envs = master
+
+[env]
+platform = espressif32
+framework = arduino
+monitor_speed = 115200
+lib_deps =
+    madhephaestus/ESP32Servo @ ^3.0.6
+    adafruit/Adafruit NeoPixel @ ^1.12.0
+
+[env:master]
+board = esp32dev
+build_src_filter =
+    +<master_main.cpp>
+    -<slave_main.cpp>
+
+[env:slave0]
+board = esp32-c3-devkitm-1
+build_flags = -D SLAVE_ID=0
+build_src_filter =
+    +<slave_main.cpp>
+    -<master_main.cpp>
+
+[env:slave1]
+board = esp32-c3-devkitm-1
+build_flags = -D SLAVE_ID=1
+build_src_filter =
+    +<slave_main.cpp>
+    -<master_main.cpp>
+
+[env:slave2]
+board = esp32-c3-devkitm-1
+build_flags = -D SLAVE_ID=2
+build_src_filter =
+    +<slave_main.cpp>
+    -<master_main.cpp>
+
+[env:slave3]
+board = esp32-c3-devkitm-1
+build_flags = -D SLAVE_ID=3
+build_src_filter =
+    +<slave_main.cpp>
+    -<master_main.cpp>
+
+    
+
+;     ;Need for speed
+;     [env:esp32-c3-devkitm-1]
+; platform = espressif32
+; board = esp32-c3-devkitm-1
+; framework = arduino
+; monitor_speed = 115200
+; # Эти флаги критичны для работы порта через встроенный USB-C
+; build_flags = 
+;     -D ARDUINO_USB_MODE=1
+;     -D ARDUINO_USB_CDC_ON_BOOT=1
+; # Попробуй добавить эту строку, если порт "отваливается"
+; monitor_dtr = 0
+; monitor_rts = 0
+; monitor_echo = yes
+; monitor_filters = send_on_enter
+; lib_deps =
+;     madhephaestus/ESP32Servo @ ^3.0.6
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <ESP32Servo.h>
+#include <esp_idf_version.h>
+#include "config.h"
+#include "protocol.h"
+#include <Adafruit_NeoPixel.h>
+
+#define LED_PIN     10 
+#define NUM_LEDS    4  
+#define LED_BRIGHT  150 
+
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+// Цвет для открытого состояния (R, G, B)
+uint32_t activeColor = strip.Color(255, 100, 0); // Оранжевый/Теплый
+uint32_t offColor    = strip.Color(0, 0, 0);       // Выключено
+
+// Состояния каждой сервомашинки
+enum ServoPhase {
+    IDLE,
+    MOVING_OPEN,
+    HOLDING,
+    MOVING_CLOSE
+};
+
+struct ServoState {
+    ServoPhase phase = IDLE;
+    uint8_t startAngle = CENTER_ANGLE;
+    uint8_t targetAngle = CENTER_ANGLE;
+    unsigned long startTime = 0;
+    uint16_t duration = 450; // Время хода в мс
+    uint16_t holdTime = 0;   // Время удержания из команды
+};
+
+Servo servos[4];
+ServoState states[4];
+uint8_t currentAngles[4] = {CENTER_ANGLE, CENTER_ANGLE, CENTER_ANGLE, CENTER_ANGLE};
+
+// --------------------------------------------------
+// Вспомогательные функции
+// --------------------------------------------------
+
+uint8_t clampAngle(int value) {
+    return (uint8_t)constrain(value, 0, 180);
+}
+
+uint8_t getClosedAngle(uint8_t idx) {
+    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[idx]);
+}
+
+uint8_t getOpenAngle(uint8_t idx) {
+    return clampAngle(CENTER_ANGLE + SERVO_OFFSETS[idx] + OPEN_DELTA);
+}
+
+// Математика Ease-In-Out
+float fEaseInOut(float t) {
+    return 0.5f * (1.0f - cosf(t * PI));
+}
+
+// --------------------------------------------------
+// Ядро управления (Non-blocking)
+// --------------------------------------------------
+
+void updateServos() {
+    unsigned long now = millis();
+    bool needShow = false;
+
+    for (int i = 0; i < 4; i++) {
+        if (states[i].phase == IDLE) continue;
+
+        if (states[i].phase == MOVING_OPEN || states[i].phase == MOVING_CLOSE) {
+            float progress = (float)(now - states[i].startTime) / states[i].duration;
+            
+            if (progress >= 1.0f) {
+                progress = 1.0f;
+                if (states[i].phase == MOVING_OPEN) {
+                    states[i].phase = HOLDING;
+                    states[i].startTime = now;
+                } else {
+                    states[i].phase = IDLE;
+                    // ГАСИМ ДИОД, когда закрытие завершено
+                    strip.setPixelColor(i, strip.Color(0, 0, 0));
+                    needShow = true;
+                }
+            }
+
+            float ease = fEaseInOut(progress);
+            float angleF = (float)states[i].startAngle + (float)(states[i].targetAngle - states[i].startAngle) * ease;
+            currentAngles[i] = (uint8_t)round(angleF);
+            servos[i].write(currentAngles[i]);
+        }
+        
+        else if (states[i].phase == HOLDING) {
+            if (now - states[i].startTime >= states[i].holdTime) {
+                states[i].phase = MOVING_CLOSE;
+                states[i].startAngle = currentAngles[i];
+                states[i].targetAngle = getClosedAngle(i);
+                states[i].startTime = now;
+                states[i].duration = 500;
+                // Можно погасить диод уже тут, если хочешь, чтобы он гас в начале закрытия
+            }
+        }
+    }
+
+    if (needShow) {
+        strip.show(); // Обновляем ленту только если какой-то диод реально выключился
+    }
+}
+
+// --------------------------------------------------
+// Обработка команд
+// --------------------------------------------------
+
+void executeCommand(const ServoCommand& cmd) {
+    for (int i = 0; i < 4; i++) {
+        if ((cmd.servoMask >> i) & 0x01) {
+            states[i].startAngle = currentAngles[i];
+            states[i].targetAngle = getOpenAngle(i);
+            states[i].startTime = millis();
+            states[i].holdTime = cmd.holdMs;
+            states[i].duration = 450;
+            states[i].phase = MOVING_OPEN;
+
+            // ЗАЖИГАЕМ СРАЗУ
+            strip.setPixelColor(i, strip.Color(255, 100, 0)); 
+        }
+    }
+    strip.show(); // Один раз обновили ленту после обработки всей маски
+}
+
+// --------------------------------------------------
+// ESP-NOW Callbacks (Обновленный для Broadcast)
+// --------------------------------------------------
+
+#if ESP_IDF_VERSION_MAJOR >= 5
+void onDataRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+#else
+void onDataRecv(const uint8_t* mac_addr, const uint8_t* data, int len) {
+#endif
+    // Вариант 1: Пришла команда только для этого слейва (адресная)
+    if (len == sizeof(ServoCommand)) {
+        ServoCommand cmd;
+        memcpy(&cmd, data, sizeof(cmd));
+        executeCommand(cmd);
+    } 
+    // Вариант 2: Пришел общий пакет для всей матрицы (широковещательный)
+    else if (len == sizeof(FullMatrixCommand)) {
+        FullMatrixCommand fullCmd;
+        memcpy(&fullCmd, data, sizeof(fullCmd));
+
+        // Вытаскиваем маску именно для этого ID (0, 1, 2 или 3)
+        uint8_t myMask = fullCmd.masks[THIS_SLAVE_ID];
+
+        if (myMask > 0) {
+            ServoCommand tempCmd;
+            tempCmd.servoMask = myMask;
+            tempCmd.holdMs = fullCmd.holdMs;
+            executeCommand(tempCmd);
+        }
+    }
+}
+
+// --------------------------------------------------
+// Setup & Loop
+// --------------------------------------------------
+
+void setup() {
+    Serial.begin(115200);
+    // --- 1. Инициализация ленты (ДОБАВИТЬ ЭТО) ---
+    strip.begin();
+    strip.setBrightness(LED_BRIGHT);
+    strip.show(); // Все диоды выключены при старте
+    
+    // Инициализация серво
+    ESP32PWM::allocateTimer(0);
+    ESP32PWM::allocateTimer(1);
+    ESP32PWM::allocateTimer(2);
+    ESP32PWM::allocateTimer(3);
+
+    for (int i = 0; i < 4; i++) {
+        servos[i].setPeriodHertz(50);
+        servos[i].attach(SERVO_PINS[i], 500, 2400);
+        // Устанавливаем в закрытое положение сразу
+        uint8_t start = getClosedAngle(i);
+        servos[i].write(start);
+        currentAngles[i] = start;
+    }
+
+    // WiFi и ESP-NOW
+    WiFi.mode(WIFI_STA);
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("ESP-NOW Init Failed");
+        ESP.restart();
+    }
+
+    esp_now_register_recv_cb(onDataRecv);
+    Serial.printf("Slave ID %d Ready. MAC: %s\n", THIS_SLAVE_ID, WiFi.macAddress().c_str());
+}
+
+void loop() {
+    // Вызываем обновление физики как можно чаще
+    updateServos();
+}
+#include <Arduino.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include "config.h"
+#include "protocol.h"
+#include "matrix_map.h"
+
+// 1. Глобальный адрес для рассылки всем сразу
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// --------------------------------------------------
+// Настройки кнопки
+// --------------------------------------------------
+
+static constexpr uint8_t BUTTON_PIN = 18;
+
+// пауза между диагоналями wave
+static constexpr uint16_t WAVE_STEP_DELAY_MS = 370;
+
+// --------------------------------------------------
+//
+//-----------------------------------
+
+// --------------------------------------------------
+// БАЗОВЫЕ ФУНКЦИИ ОТПРАВКИ
+// --------------------------------------------------
+
+// Отправка ОДНОМУ слейву (адресная)
+bool sendServoMaskCommand(uint8_t slaveId, uint8_t servoMask, uint16_t holdMs)
+{
+    if (slaveId >= 4)
+        return false;
+    ServoCommand cmd = {servoMask, holdMs};
+    esp_err_t result = esp_now_send(SLAVE_MACS[slaveId], (uint8_t *)&cmd, sizeof(cmd));
+    return (result == ESP_OK);
+}
+
+// Отправка ВСЕМ слейвам сразу (широковещательная) - ВЫНЕСЕНА ИЗ SETUP
+void broadcastMatrix(uint8_t m0, uint8_t m1, uint8_t m2, uint8_t m3, uint16_t hold)
+{
+    FullMatrixCommand cmd;
+    cmd.masks[0] = m0;
+    cmd.masks[1] = m1;
+    cmd.masks[2] = m2;
+    cmd.masks[3] = m3;
+    cmd.holdMs = hold;
+
+    esp_now_send(broadcastAddress, (uint8_t *)&cmd, sizeof(cmd));
+}
+
+// --------------------------------------------------
+// ЛОГИКА МАТРИЦЫ (ИСПОЛЬЗУЕТ setCell или broadcast)
+// --------------------------------------------------
+
+void setCell(uint8_t row, uint8_t col, uint16_t holdMs)
+{
+    if (row >= 4 || col >= 4)
+        return;
+    CellMap cell = MATRIX_MAP[row * 4 + col];
+    sendServoMaskCommand(cell.slaveId, cell.mask, holdMs);
+}
+
+// --------------------------------------------------
+// ESP-NOW helpers
+// --------------------------------------------------
+
+bool addPeer(const uint8_t mac[6])
+{
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, mac, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+
+    esp_err_t result = esp_now_add_peer(&peer);
+    return (result == ESP_OK || result == ESP_ERR_ESPNOW_EXIST);
+}
+
+// void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
+// {
+//     (void)mac_addr;
+//     Serial.printf("Send status: %s\n",
+//                   status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+// }
+
+// ESP-NOW send callback (updated for ESP32 core 3.x / IDF 5.5+)
+void onDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
+{
+    Serial.printf("Last Packet Send Status: %s\n",
+                  status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+
+    // Optional: print destination MAC (now available via tx_info->des_addr)
+    if (tx_info && tx_info->des_addr) {
+        Serial.printf("  To MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      tx_info->des_addr[0], tx_info->des_addr[1], tx_info->des_addr[2],
+                      tx_info->des_addr[3], tx_info->des_addr[4], tx_info->des_addr[5]);
+    }
+}
+// --------------------------------------------------
+// Mapping: global 4x4 -> slave + local servo
+//
+// Раскладка слейвов:
+// [0][1]
+// [2][3]
+//
+// Локальные сервы на каждом слейве:
+// 0 1
+// 2 3
+// --------------------------------------------------
+
+void mapGlobalCellToSlave(
+    uint8_t row,
+    uint8_t col,
+    uint8_t &slaveId,
+    uint8_t &servoIndex)
+{
+    slaveId = (row / 2) * 2 + (col / 2);
+
+    uint8_t localRow = row % 2;
+    uint8_t localCol = col % 2;
+
+    servoIndex = localRow * 2 + localCol;
+}
+
+// --------------------------------------------------
+// Wave: диагонали сверху-слева -> вниз-вправо
+// --------------------------------------------------
+
+void runWaveOnce()
+{
+    Serial.println("Run WAVE start");
+
+    // Для матрицы 4x4 диагоналей 7: sum = 0..6
+    for (uint8_t diag = 0; diag <= 6; diag++)
+    {
+        uint8_t slaveMasks[4] = {0, 0, 0, 0};
+
+        // Собираем все клетки, где row + col == diag
+        for (uint8_t row = 0; row < GLOBAL_ROWS; row++)
+        {
+            for (uint8_t col = 0; col < GLOBAL_COLS; col++)
+            {
+                if ((row + col) != diag)
+                {
+                    continue;
+                }
+
+                uint8_t slaveId = 0;
+                uint8_t servoIndex = 0;
+                mapGlobalCellToSlave(row, col, slaveId, servoIndex);
+
+                slaveMasks[slaveId] |= (1 << servoIndex);
+            }
+        }
+
+        Serial.printf("Diag %u -> masks: [%02X %02X %02X %02X]\n",
+                      diag,
+                      slaveMasks[0],
+                      slaveMasks[1],
+                      slaveMasks[2],
+                      slaveMasks[3]);
+
+        for (uint8_t slaveId = 0; slaveId < 4; slaveId++)
+        {
+            if (slaveMasks[slaveId] != 0)
+            {
+                sendServoMaskCommand(slaveId, slaveMasks[slaveId], HOLD_MS);
+            }
+        }
+
+        delay(WAVE_STEP_DELAY_MS);
+    }
+
+    Serial.println("Run WAVE done");
+}
+
+// --------------------------------------------------
+// All On 2 slave
+// --------------------------------------------------
+void runSlave2AllServos()
+{
+    Serial.println("Run SLAVE 2 ALL SERVOS");
+    sendServoMaskCommand(2, 0b00001111, HOLD_MS);
+}
+
+// --------------------------------------------------
+// Row test
+// --------------------------------------------------
+void runRows3Times()
+{
+    Serial.println("Run ROWS x3 start");
+
+    for (int repeat = 0; repeat < 3; repeat++)
+    {
+        Serial.printf("Cycle %d\n", repeat + 1);
+
+        for (uint8_t row = 0; row < 4; row++)
+        {
+
+            switch (row)
+            {
+            case 0:
+                sendServoMaskCommand(0, 0b00000011, HOLD_MS);
+                sendServoMaskCommand(1, 0b00000011, HOLD_MS);
+                break;
+
+            case 1:
+                sendServoMaskCommand(0, 0b00001100, HOLD_MS);
+                sendServoMaskCommand(1, 0b00001100, HOLD_MS);
+                break;
+
+            case 2:
+                sendServoMaskCommand(2, 0b00000011, HOLD_MS);
+                sendServoMaskCommand(3, 0b00000011, HOLD_MS);
+                break;
+
+            case 3:
+                sendServoMaskCommand(2, 0b00001100, HOLD_MS);
+                sendServoMaskCommand(3, 0b00001100, HOLD_MS);
+                break;
+            }
+
+            delay(500); // можно подкрутить
+        }
+    }
+
+    Serial.println("Run ROWS x3 done");
+}
+// --------------------------------------------------
+// Button helpers
+// --------------------------------------------------
+
+bool isButtonPressed()
+{
+    return digitalRead(BUTTON_PIN) == LOW;
+}
+
+// --------------------------------------------------
+// setup / loop
+// --------------------------------------------------
+// --------------------------------------------------
+// setup
+// --------------------------------------------------
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(1000);
+    Serial.println("\n=== MASTER START ===");
+
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    WiFi.mode(WIFI_STA);
+
+    if (esp_now_init() != ESP_OK)
+    {
+        Serial.println("esp_now_init failed");
+        while (true)
+            delay(1000);
+    }
+
+    esp_now_register_send_cb(onDataSent);
+
+    // 1. Добавляем 4 конкретных слейва
+    for (int i = 0; i < 4; i++)
+    {
+        if (!addPeer(SLAVE_MACS[i]))
+        {
+            Serial.printf("addPeer failed: %d\n", i);
+        }
+    }
+
+    // 2. ВАЖНО: Добавляем Broadcast адрес (всем сразу)
+    esp_now_peer_info_t bcastPeer = {};
+    memcpy(bcastPeer.peer_addr, broadcastAddress, 6);
+    bcastPeer.channel = 0;
+    bcastPeer.encrypt = false;
+    if (esp_now_add_peer(&bcastPeer) != ESP_OK)
+    {
+        Serial.println("Failed to add broadcast peer!");
+    }
+
+    Serial.println("ESP-NOW ready. Broadcast peer added.");
+}
+
+// --------------------------------------------------
+// loop с проверкой всех анимаций
+// --------------------------------------------------
+void loop()
+{
+    if (isButtonPressed())
+    {
+        delay(50); // антидребезг
+        if (isButtonPressed())
+        {
+            Serial.println("Button sequence started...");
+
+            // // Твои старые тесты
+            // runRows3Times();
+            // delay(1000);
+
+            // Твоя новая диагональная волна
+            runWaveOnce();
+            
+
+            // Тест BroadCast (если прошил слейвы новым кодом)
+            // Открываем центр на всех 4 слейвах ОДНИМ пакетом
+            Serial.println("Testing Broadcast Explosion...");
+            broadcastMatrix(0b1000, 0b0100, 0b0010, 0b0001, 500);
+            delay(1000);
+
+            while (isButtonPressed())
+                delay(10);
+            Serial.println("Sequence done.");
+        }
+    }
+    delay(5);
+}
+
+#pragma once
+#include <Arduino.h>
+
+// Для адресных команд (одному слейву)
+struct ServoCommand {
+    uint8_t servoMask;
+    uint16_t holdMs;
+};
+
+// Для широковещательных команд (всем сразу)
+struct FullMatrixCommand {
+    uint8_t masks[4]; // Маски для слейвов 0, 1, 2, 3
+    uint16_t holdMs;
+};
+
+#pragma once
+#include <Arduino.h>
+
+// Структура для описания одной ячейки матрицы
+struct CellMap {
+    uint8_t slaveId; // 0..3
+    uint8_t mask;    // битовая маска 0b0001, 0b0010 и т.д.
+};
+
+/**
+ * Глобальная карта 4x4 (16 ячеек).
+ * Индекс в массиве = Row * 4 + Col
+ * Расположение:
+ * [ 0] [ 1] [ 2] [ 3]  (Ряд 0)
+ * [ 4] [ 5] [ 6] [ 7]  (Ряд 1)
+ * [ 8] [ 9] [10] [11]  (Ряд 2)
+ * [12] [13] [14] [15]  (Ряд 3)
+ */
+const CellMap MATRIX_MAP[16] = {
+    // Ряд 0: Slave 0 (0,1), Slave 1 (0,1)
+    {0, 0b0001}, {0, 0b0010}, {1, 0b0001}, {1, 0b0010},
+    // Ряд 1: Slave 0 (2,3), Slave 1 (2,3)
+    {0, 0b0100}, {0, 0b1000}, {1, 0b0100}, {1, 0b1000},
+    // Ряд 2: Slave 2 (0,1), Slave 3 (0,1)
+    {2, 0b0001}, {2, 0b0010}, {3, 0b0001}, {3, 0b0010},
+    // Ряд 3: Slave 2 (2,3), Slave 3 (2,3)
+    {2, 0b0100}, {2, 0b1000}, {3, 0b0100}, {3, 0b1000}
+};
+
+#pragma once
+#include <Arduino.h>
+
+static constexpr uint8_t ESPNOW_CHANNEL = 1;
+
+#ifndef SLAVE_ID
+#define SLAVE_ID 0
+#endif
+
+#if SLAVE_ID == 0
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
+#elif SLAVE_ID == 1
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
+#elif SLAVE_ID == 2
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
+#elif SLAVE_ID == 3
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
+#else
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
+#endif
+
+static constexpr uint8_t THIS_SLAVE_ID = SLAVE_ID;
+
+
+// ===== MAC-адреса 4 слейвов =====
+
+static const uint8_t SLAVE_MACS[4][6] = {
+    {0x14, 0x63, 0x93, 0xC6, 0xD5, 0x10}, // slave0
+    {0xA0, 0xF2, 0x62, 0xB2, 0xF0, 0x8C}, // slave1
+    {0x88, 0x56, 0xA6, 0x78, 0xA4, 0xB4}, // slave2
+    {0x08, 0x92, 0x72, 0x84, 0x3E, 0x58}  // slave3
+};
+
+// ===== Пины 4 серв на одном ESP32-C3 =====
+static constexpr int SERVO_PINS[4] = {2, 3, 4, 5};
+
+// ===== Углы =====
+static constexpr uint8_t CENTER_ANGLE = 90;
+static constexpr uint8_t OPEN_DELTA   = 35;
+
+// ===== Тайминги =====
+static constexpr uint16_t HOLD_MS       = 240;
+static constexpr uint16_t STEP_DELAY_MS = 260;
+
+// ===== Глобальная матрица =====
+static constexpr uint8_t GLOBAL_ROWS = 4;
+static constexpr uint8_t GLOBAL_COLS = 4;
+static constexpr uint8_t LOCAL_ROWS  = 2;
+static constexpr uint8_t LOCAL_COLS  = 2;

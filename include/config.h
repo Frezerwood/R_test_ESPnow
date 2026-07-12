@@ -8,13 +8,13 @@ static constexpr uint8_t ESPNOW_CHANNEL = 1;
 #endif
 
 #if SLAVE_ID == 0
-static constexpr int SERVO_OFFSETS[4] = {-7, -4, -5, -4};
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #elif SLAVE_ID == 1
-static constexpr int SERVO_OFFSETS[4] = {-8, -6, -5, -8};
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
 #elif SLAVE_ID == 2
-static constexpr int SERVO_OFFSETS[4] = {-5, -5, -2, -2};
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
 #elif SLAVE_ID == 3
-static constexpr int SERVO_OFFSETS[4] = {-5, -5, -5, -3};
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
 #else
 static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #endif
@@ -25,8 +25,8 @@ static constexpr uint8_t THIS_SLAVE_ID = SLAVE_ID;
 // ===== MAC-адреса 4 слейвов =====
 
 static const uint8_t SLAVE_MACS[4][6] = {
-    {0xB0, 0xA6, 0x04, 0x06, 0xD4, 0x74}, // slave0
-    {0x08, 0x92, 0x72, 0x84, 0x39, 0xA4}, // slave1
+    {0x14, 0x63, 0x93, 0xC6, 0xD5, 0x10}, // slave0
+    {0xA0, 0xF2, 0x62, 0xB2, 0xF0, 0x8C}, // slave1
     {0x88, 0x56, 0xA6, 0x78, 0xA4, 0xB4}, // slave2
     {0x08, 0x92, 0x72, 0x84, 0x3E, 0x58}  // slave3
 };

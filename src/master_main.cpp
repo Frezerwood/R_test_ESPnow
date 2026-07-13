@@ -4,15 +4,23 @@
 #include "config.h"
 #include "protocol.h"
 #include "matrix_map.h"
+#include <WiFi.h>
+#include <esp_now.h>
+#include <WebServer.h>
 
 // 1. Глобальный адрес для рассылки всем сразу
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+WebServer server(80);
+
+const char *AP_SSID = "KineticWall";
+const char *AP_PASS = "12345678";
 
 // --------------------------------------------------
 // Настройки кнопки
 // --------------------------------------------------
 
-static constexpr uint8_t BUTTON_PIN = 18;
+// static constexpr uint8_t BUTTON_PIN = 18;
 
 // пауза между диагоналями wave
 static constexpr uint16_t WAVE_STEP_DELAY_MS = 370;
@@ -89,7 +97,8 @@ void onDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status
                   status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
 
     // Optional: print destination MAC (now available via tx_info->des_addr)
-    if (tx_info && tx_info->des_addr) {
+    if (tx_info && tx_info->des_addr)
+    {
         Serial.printf("  To MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
                       tx_info->des_addr[0], tx_info->des_addr[1], tx_info->des_addr[2],
                       tx_info->des_addr[3], tx_info->des_addr[4], tx_info->des_addr[5]);
@@ -229,10 +238,10 @@ void runRows3Times()
 // Button helpers
 // --------------------------------------------------
 
-bool isButtonPressed()
-{
-    return digitalRead(BUTTON_PIN) == LOW;
-}
+// bool isButtonPressed()
+// {
+//     return digitalRead(BUTTON_PIN) == LOW;
+// }
 
 // --------------------------------------------------
 // setup / loop
@@ -241,14 +250,118 @@ bool isButtonPressed()
 // setup
 // --------------------------------------------------
 
+void handleRoot()
+{
+    const char *html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Kinetic Wall</title>
+
+<style>
+body {
+    background:#202020;
+    color:white;
+    text-align:center;
+    font-family:Arial;
+    margin-top:50px;
+}
+
+button {
+    width:220px;
+    height:90px;
+    font-size:32px;
+    margin:20px;
+    border:none;
+    border-radius:15px;
+}
+
+#onBtn {
+    background:#00aa00;
+    color:white;
+}
+
+#offBtn {
+    background:#aa0000;
+    color:white;
+}
+
+#status {
+    margin-top:30px;
+    font-size:24px;
+}
+</style>
+
+<script>
+function sendCommand(cmd)
+{
+    fetch("/" + cmd);
+
+    document.getElementById("status").innerHTML =
+        "Last command: " + cmd.toUpperCase();
+}
+</script>
+
+</head>
+
+<body>
+
+<h1>Kinetic Wall</h1>
+
+<button id="onBtn" onclick="sendCommand('on')">
+ON
+</button>
+
+<button id="offBtn" onclick="sendCommand('off')">
+OFF
+</button>
+
+<div id="status">
+Ready
+</div>
+
+</body>
+</html>
+)rawliteral";
+
+    server.send(200, "text/html", html);
+}
+
+void handleOn()
+{
+    server.send(200, "text/plain", "OK");
+
+    Serial.println("WEB -> ON");
+
+    runWaveOnce();
+}
+
+void handleOff()
+{
+    broadcastMatrix(0, 0, 0, 0, 0);
+
+    Serial.println("WEB -> OFF");
+
+    server.send(200, "text/plain", "OK");
+}
 void setup()
 {
     Serial.begin(115200);
     delay(1000);
     Serial.println("\n=== MASTER START ===");
 
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
-    WiFi.mode(WIFI_STA);
+    // pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+    // WiFi.mode(WIFI_STA);
+    WiFi.mode(WIFI_AP_STA);
+
+    WiFi.softAP(AP_SSID, AP_PASS);
+
+    Serial.println();
+    Serial.println("Access Point started");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.softAPIP());
 
     if (esp_now_init() != ESP_OK)
     {
@@ -279,6 +392,14 @@ void setup()
     }
 
     Serial.println("ESP-NOW ready. Broadcast peer added.");
+
+    server.on("/", handleRoot);
+    server.on("/on", handleOn);
+    server.on("/off", handleOff);
+
+    server.begin();
+
+    Serial.println("HTTP server started");
 }
 
 // --------------------------------------------------
@@ -286,31 +407,5 @@ void setup()
 // --------------------------------------------------
 void loop()
 {
-    if (isButtonPressed())
-    {
-        delay(50); // антидребезг
-        if (isButtonPressed())
-        {
-            Serial.println("Button sequence started...");
-
-            // // Твои старые тесты
-            // runRows3Times();
-            // delay(1000);
-
-            // Твоя новая диагональная волна
-            runWaveOnce();
-            
-
-            // Тест BroadCast (если прошил слейвы новым кодом)
-            // Открываем центр на всех 4 слейвах ОДНИМ пакетом
-            Serial.println("Testing Broadcast Explosion...");
-            broadcastMatrix(0b1000, 0b0100, 0b0010, 0b0001, 500);
-            delay(1000);
-
-            while (isButtonPressed())
-                delay(10);
-            Serial.println("Sequence done.");
-        }
-    }
-    delay(5);
+    server.handleClient();
 }

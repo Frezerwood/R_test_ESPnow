@@ -6,6 +6,7 @@
 #include "config.h"
 #include "protocol.h"
 #include <Adafruit_NeoPixel.h>
+#include "indicator.h"
 
 #define LED_PIN 10
 #define NUM_LEDS 4
@@ -161,6 +162,9 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 void onDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len)
 {
 #endif
+
+indicator_blink(50); // Короткое мигание для визуального контроля приема
+
     Serial.printf("Received packet, size: %d bytes\n", len); // Отладка приема
     // Вариант 1: Пришла команда только для этого слейва (адресная)
     if (len == sizeof(ServoCommand))
@@ -197,6 +201,9 @@ void setup()
     Serial.begin(115200);
     delay(2000); // Ждем стабилизации Serial
     Serial.printf("Slave %d starting...\n", THIS_SLAVE_ID);
+
+    indicator_init(); // Инициализация встроенного светодиода для индикации
+    
     // --- 1. Инициализация ленты (ДОБАВИТЬ ЭТО) ---
     strip.begin();
     strip.setBrightness(LED_BRIGHT);

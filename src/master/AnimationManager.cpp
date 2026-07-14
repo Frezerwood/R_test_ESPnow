@@ -3,24 +3,48 @@
 // Тайминги из оригинального файла
 static constexpr uint16_t WAVE_STEP_DELAY_MS = 370;
 
-AnimationManager::AnimationManager(MasterNetwork& network) : _net(network) {}
+AnimationManager::AnimationManager(MasterNetwork &network) : _net(network) {}
 
-void AnimationManager::update() {
-    if (_currentAnim == ANIM_NONE) return;
+void AnimationManager::update()
+{
+    if (_currentAnim == ANIM_NONE)
+        return;
 
-    switch (_currentAnim) {
-        case ANIM_WAVE:
-            tickWave();
-            break;
-        case ANIM_ROWS:
-            tickRows();
-            break;
-        default:
-            break;
+    switch (_currentAnim)
+    {
+    case ANIM_WAVE:
+        tickWave();
+        break;
+    case ANIM_ROWS:
+        tickRows();
+        break;
+    case ANIM_EXPLOSION:
+        tickExplosion();
+        break;
+    default:
+        break;
     }
 }
 
-void AnimationManager::startWave() {
+void AnimationManager::startExplosion()
+{
+    Serial.println("[Anim] Explosion");
+
+    _net.broadcastMatrix(
+        0b1111,
+        0b1111,
+        0b1111,
+        0b1111,
+        HOLD_MS);
+}
+
+void AnimationManager::tickExplosion()
+{
+    _currentAnim = ANIM_NONE;
+}
+
+void AnimationManager::startWave()
+{
     Serial.println("[Anim] Run WAVE start");
     _currentAnim = ANIM_WAVE;
     _currentStep = 0;
@@ -28,7 +52,8 @@ void AnimationManager::startWave() {
     tickWave(); // Запускаем первый шаг немедленно
 }
 
-void AnimationManager::startRowsTest() {
+void AnimationManager::startRowsTest()
+{
     Serial.println("[Anim] Run ROWS x3 start");
     _currentAnim = ANIM_ROWS;
     _currentStep = 0;
@@ -37,58 +62,77 @@ void AnimationManager::startRowsTest() {
     tickRows();
 }
 
-void AnimationManager::runSlave2AllServos() {
+void AnimationManager::runSlave2AllServos()
+{
     Serial.println("[Anim] Triggering all servos on Slave 2");
     _net.sendServoMaskCommand(2, 0b00001111, HOLD_MS);
 }
 
-void AnimationManager::stopAll() {
+void AnimationManager::stopAll()
+{
     _currentAnim = ANIM_NONE;
     _net.broadcastMatrix(0, 0, 0, 0, 0);
 }
 
-void AnimationManager::tickWave() {
+void AnimationManager::tickWave()
+{
     // Проверка интервала времени для неблокирующего шага волны
-    if (_currentStep > 0 && (millis() - _lastStepTime < WAVE_STEP_DELAY_MS)) {
+    if (_currentStep > 0 && (millis() - _lastStepTime < WAVE_STEP_DELAY_MS))
+    {
         return;
     }
 
     // Для матрицы 4x4 сумма индексов (row + col) дает диагональ (от 0 до 6)
-    if (_currentStep < 7) {
-        for (uint8_t r = 0; r < 4; r++) {
-            for (uint8_t c = 0; c < 4; c++) {
-                if (r + c == _currentStep) {
+    if (_currentStep < 7)
+    {
+        for (uint8_t r = 0; r < 4; r++)
+        {
+            for (uint8_t c = 0; c < 4; c++)
+            {
+                if (r + c == _currentStep)
+                {
                     _net.setCell(r, c, HOLD_MS);
                 }
             }
         }
         _lastStepTime = millis();
         _currentStep++;
-    } else {
+    }
+    else
+    {
         Serial.println("[Anim] Wave finished");
         _currentAnim = ANIM_NONE;
     }
 }
 
-void AnimationManager::tickRows() {
+void AnimationManager::tickRows()
+{
     // Проверка интервала времени между рядами
-    if (_currentStep > 0 && (millis() - _lastStepTime < STEP_DELAY_MS)) {
+    if (_currentStep > 0 && (millis() - _lastStepTime < STEP_DELAY_MS))
+    {
         return;
     }
 
-    if (_repeatCount < 3) {
-        if (_currentStep < 4) {
+    if (_repeatCount < 3)
+    {
+        if (_currentStep < 4)
+        {
             // Активируем всю строку целиком на текущем шаге
-            for (uint8_t c = 0; c < 4; c++) {
+            for (uint8_t c = 0; c < 4; c++)
+            {
                 _net.setCell(_currentStep, c, HOLD_MS);
             }
             _lastStepTime = millis();
             _currentStep++;
-        } else {
+        }
+        else
+        {
             _currentStep = 0;
             _repeatCount++;
         }
-    } else {
+    }
+    else
+    {
         Serial.println("[Anim] Rows test finished");
         _currentAnim = ANIM_NONE;
     }

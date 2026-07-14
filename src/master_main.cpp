@@ -11,12 +11,13 @@ void setup() {
     delay(1000);
     Serial.println("\n=== KINETIC WALL: MASTER BOOT ===");
 
-    // Связываем триггеры веб-сервера сети напрямую с методами менеджера анимаций
-    network.registerAnimationCallbacks(
-        []() { anim.startWave(); },
-        []() { anim.startRowsTest(); },
-        []() { anim.runSlave2AllServos(); }
-    );
+// Связываем триггеры веб-сервера сети напрямую с методами менеджера анимаций
+network.registerAnimationCallbacks(
+[](){ anim.startWave(); },
+[](){ anim.startRowsTest(); },
+[](){ anim.startExplosion(); },
+[](){ anim.runSlave2AllServos(); }
+);
 
     // Запуск сетевой периферии (Wi-Fi AP, ESP-NOW регистрация пиров, HTTP руты)
     network.begin();

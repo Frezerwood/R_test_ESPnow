@@ -28,7 +28,15 @@ void MasterNetwork::setupWiFi()
 {
     WiFi.mode(WIFI_AP_STA);
 
-    bool ok = WiFi.softAP(AP_SSID, AP_PASS);
+    // bool ok = WiFi.softAP(AP_SSID, AP_PASS);
+    bool ok = WiFi.softAP(
+        AP_SSID,
+        AP_PASS,
+        ESPNOW_CHANNEL);
+
+    Serial.printf(
+        "AP channel: %d\n",
+        WiFi.channel());
 
     Serial.printf("AP start: %s\n", ok ? "OK" : "FAIL");
     Serial.print("IP: ");
@@ -120,7 +128,7 @@ void MasterNetwork::registerAnimationCallbacks(
 void MasterNetwork::registerHttpRoutes()
 {
     _server.on("/", HTTP_GET, [this]()
-    {
+               {
         String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -246,11 +254,10 @@ async function setSpeed()
 </html>
 )rawliteral";
 
-        _server.send(200, "text/html", html);
-    });
+        _server.send(200, "text/html", html); });
 
     _server.on("/api/pattern", HTTP_POST, [this]()
-    {
+               {
         String body = _server.arg("plain");
 
         if(body == "wave" && _onWaveStart)
@@ -265,17 +272,15 @@ async function setSpeed()
         else if(body == "slave2" && _onSlave2Start)
             _onSlave2Start();
 
-        _server.send(200,"text/plain","OK");
-    });
+        _server.send(200,"text/plain","OK"); });
 
     _server.on("/api/stop", HTTP_POST, [this]()
-    {
+               {
         broadcastMatrix(0,0,0,0,0);
-        _server.send(200,"text/plain","STOP");
-    });
+        _server.send(200,"text/plain","STOP"); });
 
     _server.on("/api/speed", HTTP_POST, [this]()
-    {
+               {
         String value = _server.arg("plain");
 
         Serial.printf(
@@ -283,6 +288,5 @@ async function setSpeed()
             value.c_str()
         );
 
-        _server.send(200,"text/plain","OK");
-    });
+        _server.send(200,"text/plain","OK"); });
 }

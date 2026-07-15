@@ -7,6 +7,7 @@
 #include "protocol.h"
 #include <Adafruit_NeoPixel.h>
 #include "indicator.h"
+#include "esp_wifi.h"
 
 #define LED_PIN 10
 #define NUM_LEDS 4
@@ -163,7 +164,7 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len)
 {
 #endif
 
-indicator_blink(50); // Короткое мигание для визуального контроля приема
+    indicator_blink(50); // Короткое мигание для визуального контроля приема
 
     Serial.printf("Received packet, size: %d bytes\n", len); // Отладка приема
     // Вариант 1: Пришла команда только для этого слейва (адресная)
@@ -203,7 +204,7 @@ void setup()
     Serial.printf("Slave %d starting...\n", THIS_SLAVE_ID);
 
     indicator_init(); // Инициализация встроенного светодиода для индикации
-    
+
     // --- 1. Инициализация ленты (ДОБАВИТЬ ЭТО) ---
     strip.begin();
     strip.setBrightness(LED_BRIGHT);
@@ -227,6 +228,15 @@ void setup()
 
     // WiFi и ESP-NOW
     WiFi.mode(WIFI_STA);
+
+    esp_wifi_set_channel(
+        ESPNOW_CHANNEL,
+        WIFI_SECOND_CHAN_NONE);
+
+    Serial.printf(
+        "WiFi channel: %d\n",
+        WiFi.channel());
+
     if (esp_now_init() != ESP_OK)
     {
         Serial.println("ESP-NOW Init Failed");

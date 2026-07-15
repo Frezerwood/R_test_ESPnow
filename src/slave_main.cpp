@@ -200,7 +200,7 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len)
 void setup()
 {
     Serial.begin(115200);
-    delay(2000); // Ждем стабилизации Serial
+    // delay(2000); // Ждем стабилизации Serial
     Serial.printf("Slave %d starting...\n", THIS_SLAVE_ID);
 
     indicator_init(); // Инициализация встроенного светодиода для индикации
@@ -216,15 +216,45 @@ void setup()
     ESP32PWM::allocateTimer(2);
     ESP32PWM::allocateTimer(3);
 
+    // for (int i = 0; i < 4; i++)
+    // {
+    //     servos[i].setPeriodHertz(50);
+    //     servos[i].attach(SERVO_PINS[i], 500, 2400);
+    //     // Устанавливаем в закрытое положение сразу
+    //     uint8_t start = getClosedAngle(i);
+    //     servos[i].write(start);
+    //     currentAngles[i] = start;
+    // }
+
     for (int i = 0; i < 4; i++)
     {
         servos[i].setPeriodHertz(50);
+
+        // Сначала удерживаем линию в определенном состоянии
+        pinMode(SERVO_PINS[i], OUTPUT);
+        digitalWrite(SERVO_PINS[i], LOW);
+
         servos[i].attach(SERVO_PINS[i], 500, 2400);
-        // Устанавливаем в закрытое положение сразу
-        uint8_t start = getClosedAngle(i);
-        servos[i].write(start);
-        currentAngles[i] = start;
+
+        currentAngles[i] = getClosedAngle(i);
     }
+
+    // Серия одинаковых кадров PWM.
+    // Даже если серва сейчас стоит на 110°, она начнет движение к 90°.
+    for (int repeat = 0; repeat < 15; repeat++)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            servos[i].write(getClosedAngle(i));
+        }
+
+        delay(20); // один период PWM
+    }
+
+    // Ждем пока сервы физически доедут
+    delay(1000);
+
+    Serial.println("HOME POSITION REACHED");
 
     // WiFi и ESP-NOW
     WiFi.mode(WIFI_STA);

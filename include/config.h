@@ -10,11 +10,11 @@ static constexpr uint8_t ESPNOW_CHANNEL = 1;
 #if SLAVE_ID == 0
 static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #elif SLAVE_ID == 1
-static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #elif SLAVE_ID == 2
-static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #elif SLAVE_ID == 3
-static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};;
+static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #else
 static constexpr int SERVO_OFFSETS[4] = {0, 0, 0, 0};
 #endif
